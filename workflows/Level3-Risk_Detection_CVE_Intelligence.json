@@ -1,0 +1,1063 @@
+{
+  "name": "Level3-Risk_Detection_CVE_Intelligence",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -3888,
+        -2432
+      ],
+      "id": "05d36a10-f028-4443-ad10-57064473a321",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "command": "=docker run --rm instrumentisto/nmap:latest -sV -p {{$json.ports}} {{$json.ip}}"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        -3280,
+        -2480
+      ],
+      "id": "81229584-3574-4231-a7e3-b15afcfa877f",
+      "name": "SSH | Nmap Service Scan",
+      "credentials": {
+        "sshPassword": {
+          "id": "uYKIdMbOjxSmRPTd",
+          "name": "SSH Password account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = [];\n\nfor (const item of items) {\n  const stdout = item.json.stdout || \"\";\n  if (!stdout) continue;\n\n  // หา IP\n  const ipMatch = stdout.match(/Nmap scan report for\\s+([0-9.]+)/);\n  const ip = ipMatch ? ipMatch[1] : null;\n\n  // แยกบรรทัด\n  const lines = stdout.split(\"\\n\");\n\n  for (const line of lines) {\n    // จับบรรทัด port/service/version\n    // ตัวอย่าง:\n    // 22/tcp open  ssh     Dropbear sshd 2019.78 (protocol 2.0)\n    // 53/tcp open  domain  (generic dns response: NXDOMAIN)\n    const m = line.match(/^(\\d+)\\/tcp\\s+open\\s+(\\S+)\\s*(.*)$/);\n\n    if (m) {\n      const port = Number(m[1]);\n      const service = m[2] || \"\";\n      const version = (m[3] || \"\").trim();\n\n      results.push({\n        json: {\n          ip,\n          port,\n          service,\n          version,\n          raw_line: line.trim()\n        }\n      });\n    }\n  }\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3392,
+        -2272
+      ],
+      "id": "55f11f5d-fb4d-4b05-972f-4437d46729cd",
+      "name": "CODE | Parse Service Version"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA",
+          "mode": "list",
+          "cachedResultName": "sec_log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1768779165,
+          "mode": "list",
+          "cachedResultName": "L1_port_discovery",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit#gid=1768779165"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -3648,
+        -2288
+      ],
+      "id": "098a604b-43ab-4ab6-99d3-ba923527e00b",
+      "name": "GS | Get Port Inventory",
+      "credentials": {
+        "googleApi": {
+          "id": "cC6tqbqF8VT7WPZa",
+          "name": "Google Sheets account-SmartInfra"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function cleanText(v) {\n  return String(v || \"\").replace(/\\s+/g, \" \").trim();\n}\n\nfunction serviceLabel(service, port) {\n  const s = String(service || \"\").toLowerCase();\n\n  if (s === \"ssh\" || port === 22) return \"SSH\";\n  if (s === \"domain\" || port === 53) return \"DNS\";\n  if (s.includes(\"http\") || [80, 8080, 8008].includes(port)) return \"HTTP\";\n  if (s.includes(\"ssl\") || s.includes(\"https\") || [443, 8443].includes(port)) return \"HTTPS\";\n  if (s === \"rtsp\" || port === 554) return \"RTSP\";\n  if (s === \"rpcbind\" || port === 111) return \"RPCBIND\";\n  if ([135, 139, 445].includes(port)) return \"SMB/RPC\";\n  if (port === 3000) return \"APP\";\n  return String(service || \"\").toUpperCase();\n}\n\nfunction detectProduct(version) {\n  const v = String(version || \"\");\n\n  if (/dropbear/i.test(v)) return \"Dropbear SSH\";\n  if (/openssh/i.test(v)) return \"OpenSSH\";\n  if (/apache/i.test(v)) return \"Apache HTTP Server\";\n  if (/nginx/i.test(v)) return \"Nginx\";\n  if (/microsoft-iis/i.test(v)) return \"Microsoft IIS\";\n  if (/node/i.test(v)) return \"Node.js App\";\n  if (/dns/i.test(v)) return \"DNS Service\";\n\n  return \"\";\n}\n\nconst out = [];\n\nfor (const item of items) {\n  const ip = cleanText(item.json.ip);\n  const port = Number(item.json.port || 0);\n  const protocol = \"tcp\";\n  const service = cleanText(item.json.service).toLowerCase();\n  const version = cleanText(item.json.version);\n  const raw_line = cleanText(item.json.raw_line);\n\n  const service_name = serviceLabel(service, port);\n  const product = detectProduct(version);\n\n  out.push({\n    json: {\n      ip,\n      port,\n      protocol,\n      service,\n      service_name,\n      product,\n      version,\n      raw_line,\n      exposed: true\n    }\n  });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3168,
+        -2272
+      ],
+      "id": "57b5d428-2363-444f-9a2d-9596704f18e7",
+      "name": "CODE | Normalize Service Data"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA",
+          "mode": "list",
+          "cachedResultName": "sec_log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 306177336,
+          "mode": "list",
+          "cachedResultName": "L2_service_inventory",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit#gid=306177336"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "scan_time_utc": "={{$json.scan_time_utc}}",
+            "scan_time_th": "={{$json.scan_time_th}}",
+            "row_key": "={{$json.row_key}}",
+            "ip": "={{$json.ip}}",
+            "port": "={{$json.port}}",
+            "service": "={{$json.service}}",
+            "protocol": "={{$json.protocol}}",
+            "service_name": "={{$json.service_name}}",
+            "product": "={{$json.product}}",
+            "version": "={{$json.version}}",
+            "exposed": "={{$json.exposed}}",
+            "first_seen": "= {{$json.first_seen}}",
+            "last_seen": "={{$json.last_seen}}"
+          },
+          "matchingColumns": [
+            "row_key"
+          ],
+          "schema": [
+            {
+              "id": "row_key",
+              "displayName": "row_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ip",
+              "displayName": "ip",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "port",
+              "displayName": "port",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "protocol",
+              "displayName": "protocol",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service",
+              "displayName": "service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service_name",
+              "displayName": "service_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "product",
+              "displayName": "product",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "version",
+              "displayName": "version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "exposed",
+              "displayName": "exposed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "first_seen",
+              "displayName": "first_seen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_seen",
+              "displayName": "last_seen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "scan_time_utc",
+              "displayName": "scan_time_utc",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scan_time_th",
+              "displayName": "scan_time_th",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -2624,
+        -2272
+      ],
+      "id": "1a615bed-31ec-4513-90ab-2c734f49bf38",
+      "name": "GS | Service Inventory",
+      "credentials": {
+        "googleApi": {
+          "id": "cC6tqbqF8VT7WPZa",
+          "name": "Google Sheets account-SmartInfra"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const hosts = {};\n\nfor (const item of items) {\n\n  const ip = item.json.ip;\n  const port = item.json.port;\n\n  if (!hosts[ip]) {\n    hosts[ip] = [];\n  }\n\n  hosts[ip].push(port);\n}\n\nconst results = [];\n\nfor (const ip in hosts) {\n\n  results.push({\n    json: {\n      ip: ip,\n      ports: hosts[ip].join(\",\")\n    }\n  });\n\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3472,
+        -2480
+      ],
+      "id": "8e95f756-ea27-48b5-921e-baa7260dfb23",
+      "name": "CODE | Group Ports by Host"
+    },
+    {
+      "parameters": {
+        "jsCode": "const nowUTC = new Date().toISOString();\nconst nowTH = new Date().toLocaleString(\"sv-SE\", { timeZone: \"Asia/Bangkok\" });\n\nreturn items.map(item => {\n\n  const ip = item.json.ip;\n  const port = item.json.port;\n  const protocol = item.json.protocol;\n\n  const row_key = `${ip}_${port}_${protocol}`;\n\n  return {\n    json: {\n      row_key,\n      ip,\n      port,\n      protocol,\n      service: item.json.service,\n      service_name: item.json.service_name,\n      product: item.json.product,\n      version: item.json.version,\n      exposed: item.json.exposed,\n      first_seen: nowTH,\n      last_seen: nowTH,\n      scan_time_utc: nowUTC,\n      scan_time_th: nowTH\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2960,
+        -2272
+      ],
+      "id": "4de0fb6d-4426-4a32-ad6a-30e8417b4c8d",
+      "name": "CODE | Build Service Inventory Row"
+    },
+    {
+      "parameters": {
+        "jsCode": "function hasAny(text, keywords) {\n  const t = String(text || \"\").toLowerCase();\n  return keywords.some(k => t.includes(String(k).toLowerCase()));\n}\n\nfunction uniq(arr) {\n  return [...new Set((arr || []).filter(Boolean))];\n}\n\nfunction addTag(tags, ...newTags) {\n  return uniq([...(tags || []), ...newTags]);\n}\n\nfunction classifySeverity(score) {\n  if (score >= 90) return \"CRITICAL\";\n  if (score >= 70) return \"HIGH\";\n  if (score >= 40) return \"MEDIUM\";\n  return \"LOW\";\n}\n\nconst out = [];\n\nfor (const item of items) {\n  const ip = String(item.json.ip || \"\").trim();\n  const port = Number(item.json.port || 0);\n  const protocol = String(item.json.protocol || \"tcp\").trim().toLowerCase();\n  const service = String(item.json.service || \"\").trim().toLowerCase();\n  const service_name = String(item.json.service_name || \"\").trim();\n  const product = String(item.json.product || \"\").trim();\n  const version = String(item.json.version || \"\").trim();\n  const raw_line = String(item.json.raw_line || \"\").trim();\n  const row_key = String(item.json.row_key || `${ip}_${port}_${protocol}`).trim();\n\n  const exposedRaw = item.json.exposed;\n  const exposed = String(exposedRaw).toLowerCase() === \"true\" || exposedRaw === true;\n\n  let risk_score = 10;\n  let finding = \"Service detected\";\n  let recommendation = \"Review business necessity and close unused ports.\";\n  let tags = [\"service-detected\"];\n  let rule_id = \"SOC-GEN-001\";\n\n  // -----------------------------\n  // 1) Legacy / Plaintext / Unsafe remote access\n  // -----------------------------\n  if (port === 23 || service === \"telnet\") {\n    risk_score = 95;\n    finding = \"Telnet service exposed\";\n    recommendation = \"Disable Telnet immediately and replace it with SSH. Restrict management access to trusted hosts only.\";\n    tags = addTag(tags, \"telnet\", \"plaintext\", \"legacy\", \"remote-access\");\n    rule_id = \"SOC-RA-001\";\n  }\n\n  else if (port === 21 || service === \"ftp\") {\n    risk_score = 80;\n    finding = \"FTP service exposed\";\n    recommendation = \"Avoid plaintext FTP. Migrate to SFTP/FTPS, restrict source IPs, and disable anonymous access.\";\n    tags = addTag(tags, \"ftp\", \"plaintext\", \"file-transfer\", \"remote-access\");\n    rule_id = \"SOC-RA-002\";\n  }\n\n  else if (port === 20) {\n    risk_score = 70;\n    finding = \"FTP data channel exposed\";\n    recommendation = \"Review whether active-mode FTP is required. Prefer secure alternatives and restrict access.\";\n    tags = addTag(tags, \"ftp\", \"legacy\", \"plaintext\");\n    rule_id = \"SOC-RA-003\";\n  }\n\n  else if (port === 3389 || service === \"ms-wbt-server\") {\n    risk_score = 90;\n    finding = \"RDP service exposed\";\n    recommendation = \"Restrict RDP behind VPN/firewall, enforce MFA if available, and monitor login attempts.\";\n    tags = addTag(tags, \"rdp\", \"remote-access\", \"windows\");\n    rule_id = \"SOC-RA-004\";\n  }\n\n  else if (port === 5900 || service === \"vnc\") {\n    risk_score = 78;\n    finding = \"VNC service exposed\";\n    recommendation = \"Restrict VNC behind VPN/firewall, require strong authentication, and disable if unnecessary.\";\n    tags = addTag(tags, \"vnc\", \"remote-access\", \"desktop-sharing\");\n    rule_id = \"SOC-RA-005\";\n  }\n\n  // -----------------------------\n  // 2) SSH\n  // -----------------------------\n  else if (port === 22 || service === \"ssh\") {\n    risk_score = 45;\n    finding = \"SSH service exposed\";\n    recommendation = \"Restrict source IPs, prefer key-based authentication, disable password login where possible, and rotate credentials.\";\n    tags = addTag(tags, \"ssh\", \"remote-access\", \"admin-service\");\n    rule_id = \"SOC-SSH-001\";\n\n    if (hasAny(product, [\"dropbear\"]) || hasAny(version, [\"dropbear\"])) {\n      risk_score = 55;\n      finding = \"SSH service exposed (Dropbear detected)\";\n      recommendation = \"Review firmware/software updates, restrict source IPs, and harden SSH settings for embedded/Linux devices.\";\n      tags = addTag(tags, \"dropbear\", \"embedded-linux\", \"iot\");\n      rule_id = \"SOC-SSH-002\";\n    }\n\n    if (hasAny(version, [\"openssh 5\", \"openssh 6\", \"openssh_5\", \"openssh_6\"])) {\n      risk_score = 78;\n      finding = \"SSH service exposed with potentially outdated OpenSSH version\";\n      recommendation = \"Verify installed OpenSSH version and update to a supported release. Review cipher/KEX hardening.\";\n      tags = addTag(tags, \"outdated-ssh\", \"patching\");\n      rule_id = \"SOC-SSH-003\";\n    }\n  }\n\n  // -----------------------------\n  // 3) Windows / Lateral movement\n  // -----------------------------\n  else if ([135, 139, 445].includes(port) || [\"msrpc\", \"netbios-ssn\", \"microsoft-ds\"].includes(service)) {\n    risk_score = 88;\n    finding = \"Windows RPC/SMB-related service exposed\";\n    recommendation = \"Restrict SMB/RPC to trusted segments only, verify patch status, and do not expose to untrusted networks.\";\n    tags = addTag(tags, \"windows\", \"smb\", \"rpc\", \"lateral-movement\");\n    rule_id = \"SOC-WIN-001\";\n  }\n\n  else if (port === 137 || port === 138) {\n    risk_score = 72;\n    finding = \"NetBIOS service exposed\";\n    recommendation = \"Restrict legacy Windows name/file-sharing traffic and disable if not required.\";\n    tags = addTag(tags, \"windows\", \"netbios\", \"legacy\");\n    rule_id = \"SOC-WIN-002\";\n  }\n\n  // -----------------------------\n  // 4) Web / Admin / App ports\n  // -----------------------------\n  else if (\n    [80, 443, 8080, 8443, 8008, 8009, 3000, 5000, 5601, 9090, 9091].includes(port) ||\n    hasAny(service_name, [\"HTTP\", \"HTTPS\"]) ||\n    hasAny(service, [\"http\", \"https\"])\n  ) {\n    risk_score = 50;\n    finding = \"Web service exposed\";\n    recommendation = \"Review exposed web applications, patch software, protect admin interfaces, and restrict management panels.\";\n    tags = addTag(tags, \"web\", \"http\", \"app\");\n    rule_id = \"SOC-WEB-001\";\n\n    if ([8008, 8009, 8443, 3000, 5000, 5601, 9090, 9091].includes(port)) {\n      risk_score = 62;\n      finding = \"Alternative web/application port exposed\";\n      recommendation = \"Verify whether this web/admin/application port must be reachable. Restrict or proxy it if unnecessary.\";\n      tags = addTag(tags, \"alt-web-port\", \"admin-surface\");\n      rule_id = \"SOC-WEB-002\";\n    }\n\n    if (port === 443 || port === 8443) {\n      tags = addTag(tags, \"tls-surface\");\n    }\n\n    if (hasAny(product, [\"nginx\", \"apache\", \"iis\"])) {\n      tags = addTag(tags, \"web-server\");\n    }\n  }\n\n  // -----------------------------\n  // 5) DNS / Infra services\n  // -----------------------------\n  else if (port === 53 || service === \"domain\") {\n    risk_score = 20;\n    finding = \"DNS service detected\";\n    recommendation = \"Ensure recursion and zone transfer are restricted appropriately and expose only where required.\";\n    tags = addTag(tags, \"dns\", \"infra-service\");\n    rule_id = \"SOC-INFRA-001\";\n  }\n\n  else if (port === 111 || service === \"rpcbind\") {\n    risk_score = 55;\n    finding = \"rpcbind service exposed\";\n    recommendation = \"Restrict rpcbind exposure to internal hosts only and disable it if unused.\";\n    tags = addTag(tags, \"rpcbind\", \"linux\", \"infra-service\");\n    rule_id = \"SOC-INFRA-002\";\n  }\n\n  else if (port === 123 || service === \"ntp\") {\n    risk_score = 25;\n    finding = \"NTP service detected\";\n    recommendation = \"Ensure NTP is restricted to trusted networks and not susceptible to abuse or amplification.\";\n    tags = addTag(tags, \"ntp\", \"infra-service\");\n    rule_id = \"SOC-INFRA-003\";\n  }\n\n  else if (port === 161 || service === \"snmp\") {\n    risk_score = 60;\n    finding = \"SNMP service exposed\";\n    recommendation = \"Restrict SNMP to trusted hosts, avoid default community strings, and prefer SNMPv3.\";\n    tags = addTag(tags, \"snmp\", \"network-device\", \"infra-service\");\n    rule_id = \"SOC-INFRA-004\";\n  }\n\n  // -----------------------------\n  // 6) Database exposure\n  // -----------------------------\n  else if ([1433, 1521, 3306, 5432, 6379, 27017, 9200].includes(port)) {\n    risk_score = 90;\n    finding = \"Database or data platform port exposed\";\n    recommendation = \"Restrict access to application hosts only, require authentication, and never expose data services unnecessarily.\";\n    tags = addTag(tags, \"database\", \"data-platform\", \"high-value-target\");\n    rule_id = \"SOC-DATA-001\";\n\n    if (port === 6379) {\n      finding = \"Redis service port exposed\";\n      recommendation = \"Restrict Redis to internal networks only, require authentication where supported, and disable unsafe remote access.\";\n      tags = addTag(tags, \"redis\");\n      rule_id = \"SOC-DATA-002\";\n    }\n\n    if (port === 9200) {\n      finding = \"Elasticsearch API port exposed\";\n      recommendation = \"Restrict Elasticsearch access, require authentication, and prevent public exposure.\";\n      tags = addTag(tags, \"elasticsearch\", \"search-cluster\");\n      rule_id = \"SOC-DATA-003\";\n    }\n  }\n\n  // -----------------------------\n  // 7) IoT / Camera / Messaging\n  // -----------------------------\n  else if (port === 554 || service === \"rtsp\") {\n    risk_score = 78;\n    finding = \"RTSP/IP camera service exposed\";\n    recommendation = \"Change default credentials, restrict access, and isolate cameras on a separate VLAN or security zone.\";\n    tags = addTag(tags, \"camera\", \"rtsp\", \"iot\", \"video-surveillance\");\n    rule_id = \"SOC-IOT-001\";\n  }\n\n  else if (port === 1883 || port === 8883 || service === \"mqtt\") {\n    risk_score = 65;\n    finding = \"MQTT service exposed\";\n    recommendation = \"Require authentication, use TLS where possible, and restrict broker access to trusted devices and applications.\";\n    tags = addTag(tags, \"mqtt\", \"iot\", \"message-broker\");\n    rule_id = \"SOC-IOT-002\";\n  }\n\n  else if (port === 5683 || service === \"coap\") {\n    risk_score = 68;\n    finding = \"CoAP service exposed\";\n    recommendation = \"Restrict CoAP to trusted IoT segments and review device-level authentication and encryption controls.\";\n    tags = addTag(tags, \"coap\", \"iot\");\n    rule_id = \"SOC-IOT-003\";\n  }\n\n  // -----------------------------\n  // 8) Email / Directory / Auth services\n  // -----------------------------\n  else if ([25, 465, 587].includes(port) || service === \"smtp\") {\n    risk_score = 35;\n    finding = \"SMTP service detected\";\n    recommendation = \"Verify whether the host should provide mail services and ensure relay controls are configured.\";\n    tags = addTag(tags, \"smtp\", \"mail-service\");\n    rule_id = \"SOC-MAIL-001\";\n  }\n\n  else if ([110, 995].includes(port) || service === \"pop3\") {\n    risk_score = 40;\n    finding = \"POP3 service exposed\";\n    recommendation = \"Prefer modern secure mail access methods and restrict unnecessary exposure.\";\n    tags = addTag(tags, \"pop3\", \"mail-service\");\n    rule_id = \"SOC-MAIL-002\";\n  }\n\n  else if ([143, 993].includes(port) || service === \"imap\") {\n    risk_score = 35;\n    finding = \"IMAP service exposed\";\n    recommendation = \"Ensure secure configuration and restrict unnecessary exposure.\";\n    tags = addTag(tags, \"imap\", \"mail-service\");\n    rule_id = \"SOC-MAIL-003\";\n  }\n\n  else if ([389, 636].includes(port) || service === \"ldap\") {\n    risk_score = 70;\n    finding = \"Directory service exposed\";\n    recommendation = \"Restrict LDAP/LDAPS to trusted networks only and verify authentication and encryption settings.\";\n    tags = addTag(tags, \"ldap\", \"directory-service\", \"identity\");\n    rule_id = \"SOC-ID-001\";\n  }\n\n  else if (port === 88 || service === \"kerberos\") {\n    risk_score = 75;\n    finding = \"Kerberos service exposed\";\n    recommendation = \"Ensure this identity service is not unnecessarily exposed beyond trusted internal zones.\";\n    tags = addTag(tags, \"kerberos\", \"identity\", \"windows\");\n    rule_id = \"SOC-ID-002\";\n  }\n\n  // -----------------------------\n  // 9) Unknown high ports / custom services\n  // -----------------------------\n  else if (port >= 1024 && port <= 65535) {\n    risk_score = 30;\n    finding = \"Non-standard service port detected\";\n    recommendation = \"Validate whether this custom or dynamic service port is expected and restrict access where appropriate.\";\n    tags = addTag(tags, \"non-standard-port\");\n    rule_id = \"SOC-GEN-002\";\n  }\n\n  // -----------------------------\n  // 10) Exposure adjustment\n  // -----------------------------\n  if (!exposed) {\n    risk_score = Math.max(5, risk_score - 15);\n    tags = addTag(tags, \"not-confirmed-exposed\");\n  } else {\n    tags = addTag(tags, \"exposed\");\n  }\n\n  // -----------------------------\n  // 11) Text-based heuristics\n  // -----------------------------\n  if (hasAny(version, [\"generic dns response\", \"unrecognized\"])) {\n    tags = addTag(tags, \"fingerprint-limited\");\n  }\n\n  if (hasAny(product, [\"dropbear\", \"mikrotik\", \"busybox\"]) || hasAny(version, [\"dropbear\", \"busybox\"])) {\n    tags = addTag(tags, \"embedded-device\");\n  }\n\n  if (hasAny(raw_line, [\"ssl\", \"tls\"]) || [443, 465, 636, 993, 995, 8443, 8883].includes(port)) {\n    tags = addTag(tags, \"encrypted-service\");\n  }\n\n  const risk_level = classifySeverity(risk_score);\n  const severity_rank =\n    risk_level === \"CRITICAL\" ? 4 :\n    risk_level === \"HIGH\" ? 3 :\n    risk_level === \"MEDIUM\" ? 2 : 1;\n\n  out.push({\n    json: {\n      row_key,\n      ip,\n      port,\n      protocol,\n      service,\n      service_name,\n      product,\n      version,\n      raw_line,\n      exposed,\n\n      rule_id,\n      risk_level,\n      severity_rank,\n      risk_score,\n      finding,\n      recommendation,\n      tags: uniq(tags).join(\",\")\n    }\n  });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3296,
+        -2032
+      ],
+      "id": "5f38770a-0ac7-4438-8a8e-77eafa25cd7f",
+      "name": "CODE | Detect Risky Services"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// CODE | Build Risk Finding Row\n// Mode: Run Once for Each Item\n\nfunction clean(v) {\n  return String(v ?? '').trim();\n}\n\nfunction nowTH() {\n  const now = new Date();\n  const th = new Date(now.getTime() + (7 * 60 * 60 * 1000));\n  return th.toISOString().replace('Z', '+07:00');\n}\n\nfunction calcThreatLevel(ruleRisk, cvss, cveFound, kevExploited) {\n  const r = clean(ruleRisk).toUpperCase();\n  const s = Number(cvss ?? 0);\n\n  // ถ้าอยู่ใน CISA KEV ให้ยกระดับทันที\n  if (kevExploited) return 'CRITICAL';\n\n  if (cveFound && s >= 9.0) return 'CRITICAL';\n  if (cveFound && s >= 7.0) return 'HIGH';\n  if (cveFound && s >= 4.0) return 'MEDIUM';\n\n  if (r === 'CRITICAL') return 'CRITICAL';\n  if (r === 'HIGH') return 'HIGH';\n  if (r === 'MEDIUM') return 'MEDIUM';\n  if (r === 'LOW') return 'LOW';\n\n  return 'INFO';\n}\n\nfunction calcSecurityScore(ruleRiskScore, cvss, cveCount, kevExploited) {\n  const risk = Number(ruleRiskScore ?? 0);\n  const score = Number(cvss ?? 0);\n  const count = Number(cveCount ?? 0);\n\n  let total = Math.round(risk + (score * 5) + Math.min(count * 3, 15));\n\n  // ถ้าเป็น KEV ให้บวกน้ำหนักเพิ่ม\n  if (kevExploited) total += 20;\n\n  return total;\n}\n\nfunction calcSecurityGrade(score) {\n  if (score >= 90) return 'F';\n  if (score >= 75) return 'D';\n  if (score >= 60) return 'C';\n  if (score >= 40) return 'B';\n  return 'A';\n}\n\nfunction calcRiskIndex(threatLevel, securityScore, kevExploited) {\n  const t = clean(threatLevel).toUpperCase();\n\n  if (kevExploited) return `KEV-${securityScore}`;\n  if (t === 'CRITICAL') return `CRI-${securityScore}`;\n  if (t === 'HIGH') return `HIG-${securityScore}`;\n  if (t === 'MEDIUM') return `MED-${securityScore}`;\n  if (t === 'LOW') return `LOW-${securityScore}`;\n  return `INF-${securityScore}`;\n}\n\nconst j = $json;\n\nconst rule_risk = clean(j.risk_level);\nconst risk_score = Number(j.risk_score ?? 0);\n\nconst cve_found = !!j.cve_found;\nconst cve_ids = Array.isArray(j.cve_ids)\n  ? j.cve_ids\n  : clean(j.cve_ids)\n      .split(',')\n      .map(x => x.trim())\n      .filter(Boolean);\n\nconst cve_count = Number(j.cve_count ?? 0);\nconst max_cvss_score = Number(j.max_cvss_score ?? 0);\nconst cve_severity = clean(j.cve_severity || 'INFO');\nconst cve_confidence = clean(j.cve_confidence || 'no_reliable_match');\n\nconst kev_exploited = !!j.kev_exploited;\nconst kev_cve = clean(j.kev_cve);\nconst kev_source = clean(j.kev_source || '');\n\nconst threat_level = calcThreatLevel(rule_risk, max_cvss_score, cve_found, kev_exploited);\nconst security_score = calcSecurityScore(risk_score, max_cvss_score, cve_count, kev_exploited);\nconst security_grade = calcSecurityGrade(security_score);\nconst risk_index = calcRiskIndex(threat_level, security_score, kev_exploited);\n\nreturn {\n  json: {\n    finding_key: clean(j.finding_key || j.row_key),\n    row_key: clean(j.row_key),\n\n    detected_at: nowTH(),\n\n    ip: clean(j.ip),\n    port: j.port ?? '',\n    protocol: clean(j.protocol),\n\n    service: clean(j.service),\n    service_name: clean(j.service_name),\n    product: clean(j.product),\n    version_raw: clean(j.version_raw),\n    version_number: clean(j.version_number),\n\n    exposed: !!j.exposed,\n\n    rule_id: clean(j.rule_id),\n    rule_risk,\n    risk_score,\n    severity_rank: Number(j.severity_rank ?? 0),\n\n    finding: clean(j.finding),\n    recommendation: clean(j.recommendation),\n    tags: clean(j.tags),\n\n    cve_search_query: clean(j.cve_search_query),\n    nvd_total_results: Number(j.nvd_total_results ?? 0),\n    cve_found,\n    cve_confidence,\n    cve_ids: cve_ids.join(','),\n    cve_count,\n    top_cve_id: clean(j.top_cve_id),\n    top_cve_description: clean(j.top_cve_description),\n    top_cve_relevance_score: Number(j.top_cve_relevance_score ?? 0),\n    max_cvss_score,\n    cve_severity,\n\n    kev_exploited,\n    kev_cve,\n    kev_source,\n\n    threat_level,\n    security_score,\n    security_grade,\n    risk_index\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2240,
+        -2032
+      ],
+      "id": "ba82faab-2c2b-49c2-83a2-035e6589e345",
+      "name": "CODE | Build Risk Finding Row"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA",
+          "mode": "list",
+          "cachedResultName": "sec_log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1259440840,
+          "mode": "list",
+          "cachedResultName": "L3_risk_findings",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit#gid=1259440840"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "finding_key": "={{$json.finding_key}}",
+            "row_key": "={{$json.row_key}}",
+            "ip": "={{$json.ip}}",
+            "port": "={{$json.port}}",
+            "protocol": "={{$json.protocol}}",
+            "service": "={{$json.service}}",
+            "service_name": "={{$json.service_name}}",
+            "product": "={{$json.product}}",
+            "risk_score": "={{$json.risk_score}}",
+            "finding": "={{$json.finding}}",
+            "recommendation": "={{$json.recommendation}}",
+            "tags": "={{$json.tags}}",
+            "rule_id": "={{$json.rule_id}}",
+            "severity_rank": "={{$json.severity_rank}}",
+            "version_raw": "={{ $json.version_raw }}",
+            "version_number": "={{ $json.version_number }}",
+            "exposed": "={{ $json.exposed }}",
+            "rule_risk": "={{ $json.rule_risk }}",
+            "cve_search_query": "={{ $json.cve_search_query }}",
+            "nvd_total_results": "={{ $json.nvd_total_results }}",
+            "cve_found": "={{ $json.cve_found }}",
+            "cve_confidence": "={{ $json.cve_confidence }}",
+            "cve_ids": "={{ $json.cve_ids }}",
+            "cve_count": "={{ $json.cve_count }}",
+            "top_cve_id": "={{ $json.top_cve_id }}",
+            "top_cve_description": "={{ $json.top_cve_description }}",
+            "top_cve_relevance_score": "={{ $json.top_cve_relevance_score }}",
+            "max_cvss_score": "={{ $json.max_cvss_score }}",
+            "cve_severity": "={{ $json.cve_severity }}",
+            "threat_level": "={{ $json.threat_level }}",
+            "security_score": "={{ $json.security_score }}",
+            "security_grade": "={{ $json.security_grade }}",
+            "risk_index": "={{ $json.risk_index }}",
+            "detected_at": "={{ $json.detected_at }}",
+            "kev_exploited": "={{ $json.kev_exploited }}",
+            "kev_cve": "={{ $json.kev_cve }}",
+            "kev_source": "={{ $json.kev_source }}"
+          },
+          "matchingColumns": [
+            "finding_key"
+          ],
+          "schema": [
+            {
+              "id": "finding_key",
+              "displayName": "finding_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_key",
+              "displayName": "row_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "detected_at",
+              "displayName": "detected_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ip",
+              "displayName": "ip",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "port",
+              "displayName": "port",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "protocol",
+              "displayName": "protocol",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service",
+              "displayName": "service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service_name",
+              "displayName": "service_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "product",
+              "displayName": "product",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "version_raw",
+              "displayName": "version_raw",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "version_number",
+              "displayName": "version_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "exposed",
+              "displayName": "exposed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "rule_id",
+              "displayName": "rule_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "rule_risk",
+              "displayName": "rule_risk",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "risk_score",
+              "displayName": "risk_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "severity_rank",
+              "displayName": "severity_rank",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "finding",
+              "displayName": "finding",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "recommendation",
+              "displayName": "recommendation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "tags",
+              "displayName": "tags",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cve_search_query",
+              "displayName": "cve_search_query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "nvd_total_results",
+              "displayName": "nvd_total_results",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "cve_found",
+              "displayName": "cve_found",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "cve_confidence",
+              "displayName": "cve_confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "cve_ids",
+              "displayName": "cve_ids",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "cve_count",
+              "displayName": "cve_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "top_cve_id",
+              "displayName": "top_cve_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "top_cve_description",
+              "displayName": "top_cve_description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "top_cve_relevance_score",
+              "displayName": "top_cve_relevance_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "max_cvss_score",
+              "displayName": "max_cvss_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "cve_severity",
+              "displayName": "cve_severity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "kev_exploited",
+              "displayName": "kev_exploited",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "kev_cve",
+              "displayName": "kev_cve",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "kev_source",
+              "displayName": "kev_source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "threat_level",
+              "displayName": "threat_level",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "security_score",
+              "displayName": "security_score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "security_grade",
+              "displayName": "security_grade",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "risk_index",
+              "displayName": "risk_index",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -2016,
+        -2032
+      ],
+      "id": "750c44c3-0845-4987-87ca-39f832e34a50",
+      "name": "GS | Risk Findings",
+      "credentials": {
+        "googleApi": {
+          "id": "cC6tqbqF8VT7WPZa",
+          "name": "Google Sheets account-SmartInfra"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -3856,
+        -2192
+      ],
+      "id": "fa738d5b-ed7d-4941-8e72-7041151207a1",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// CODE | Prepare CVE Query\n// Mode: Run Once for Each Item\n\nfunction clean(v) {\n  return String(v ?? '').trim();\n}\n\nfunction normSpaces(v) {\n  return clean(v).replace(/\\s+/g, ' ');\n}\n\nfunction lower(v) {\n  return normSpaces(v).toLowerCase();\n}\n\nfunction pickFirst(...vals) {\n  for (const v of vals) {\n    const s = normSpaces(v);\n    if (s) return s;\n  }\n  return '';\n}\n\nfunction extractVersionNumber(versionRaw = '') {\n  const v = normSpaces(versionRaw);\n\n  // เช่น 7.2 / 1.18.0 / 2.4.49 / 2019.78\n  const m = v.match(/\\b\\d+(?:\\.\\d+){0,3}\\b/);\n  return m ? m[0] : '';\n}\n\nfunction normalizeProduct(service, product, serviceName) {\n  const s = lower(service);\n  const p = normSpaces(product);\n  const sn = normSpaces(serviceName);\n\n  if (p) return p;\n\n  if (s === 'ssh') return 'OpenSSH';\n  if (s === 'http') return 'Apache httpd';\n  if (s === 'https') return 'Apache httpd';\n  if (s === 'ftp') return 'FTP';\n  if (s === 'telnet') return 'Telnet';\n  if (s === 'mysql') return 'MySQL';\n  if (s === 'postgresql') return 'PostgreSQL';\n  if (s === 'redis') return 'Redis';\n  if (s === 'mongodb') return 'MongoDB';\n  if (s === 'ms-wbt-server') return 'Remote Desktop';\n  if (s === 'microsoft-ds') return 'SMB';\n\n  return sn || service || 'unknown-service';\n}\n\nfunction buildStrictQuery(product, service, versionNumber) {\n  const p = normSpaces(product);\n  const s = lower(service);\n  const v = clean(versionNumber);\n\n  if (!v) return p || service || '';\n\n  if (lower(p).includes('dropbear')) return `Dropbear ${v}`;\n  if (lower(p).includes('openssh')) return `OpenSSH ${v}`;\n  if (lower(p).includes('apache')) return `Apache httpd ${v}`;\n  if (lower(p).includes('nginx')) return `nginx ${v}`;\n  if (lower(p).includes('microsoft iis')) return `Microsoft IIS ${v}`;\n  if (lower(p).includes('mysql')) return `MySQL ${v}`;\n  if (lower(p).includes('postgresql')) return `PostgreSQL ${v}`;\n  if (lower(p).includes('redis')) return `Redis ${v}`;\n  if (lower(p).includes('mongodb')) return `MongoDB ${v}`;\n\n  if (s === 'ssh') return `OpenSSH ${v}`;\n  if (s === 'http') return `Apache httpd ${v}`;\n  if (s === 'https') return `Apache httpd ${v}`;\n  if (s === 'mysql') return `MySQL ${v}`;\n  if (s === 'redis') return `Redis ${v}`;\n  if (s === 'mongodb') return `MongoDB ${v}`;\n\n  return `${p || service} ${v}`.trim();\n}\n\nconst j = $json;\n\nconst ip = clean(j.ip);\nconst port = j.port ?? '';\nconst protocol = clean(j.protocol || 'tcp');\n\nconst service = lower(pickFirst(j.service, j.service_name));\nconst service_name = pickFirst(j.service_name, j.service).toUpperCase();\n\nconst product = normalizeProduct(service, j.product, service_name);\nconst version_raw = normSpaces(pickFirst(j.version, j.version_raw));\nconst version_number = extractVersionNumber(version_raw);\n\nconst row_key = clean(j.row_key);\nconst rule_id = clean(j.rule_id);\nconst risk_level = clean(j.risk_level || j.severity || 'LOW').toUpperCase();\nconst risk_score = Number(j.risk_score ?? 0);\nconst finding = normSpaces(j.finding);\nconst recommendation = normSpaces(j.recommendation);\nconst tags = normSpaces(j.tags);\n\n// keyword หลัก\nconst keyword_base = product || service_name || service;\n\n// query ทั่วไป\nlet search_query = '';\nif (keyword_base && version_number) {\n  search_query = `${keyword_base} ${version_number}`;\n} else if (keyword_base && version_raw) {\n  search_query = `${keyword_base} ${version_raw}`;\n} else {\n  search_query = keyword_base || service || 'unknown service';\n}\n\n// query แบบแคบกว่า\nconst search_query_strict = buildStrictQuery(product, service, version_number);\n\n// query สำรอง\nconst search_query_alt_1 = [product, version_number].filter(Boolean).join(' ').trim();\nconst search_query_alt_2 = [service_name || service, version_number].filter(Boolean).join(' ').trim();\nconst search_query_alt_3 = product || service_name || service;\n\n// key สำหรับ finding\nconst finding_key = [\n  ip || 'no-ip',\n  port || 'no-port',\n  protocol || 'no-proto',\n  service || 'no-service',\n  version_number || 'na',\n  rule_id || 'no-rule'\n].join('|');\n\nreturn {\n  json: {\n    ...j,\n\n    ip,\n    port,\n    protocol,\n\n    service,\n    service_name,\n    product,\n\n    version_raw,\n    version_number,\n\n    keyword_base,\n    search_query,\n    search_query_strict,\n    search_query_alt_1,\n    search_query_alt_2,\n    search_query_alt_3,\n\n    row_key,\n    finding_key,\n\n    risk_level,\n    risk_score,\n    rule_id,\n    finding,\n    recommendation,\n    tags,\n\n    cve_lookup_ready: !!(search_query_strict || search_query)\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3088,
+        -2032
+      ],
+      "id": "806aecb7-df6d-44ae-853b-d52c20be8aa1",
+      "name": "CODE | Prepare CVE Query"
+    },
+    {
+      "parameters": {
+        "url": "https://services.nvd.nist.gov/rest/json/cves/2.0",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "keywordSearch",
+              "value": "={{$json.search_query_strict || $json.search_query}}"
+            },
+            {
+              "name": "keywordExactMatch"
+            },
+            {
+              "name": "resultsPerPage",
+              "value": "5"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -2864,
+        -2032
+      ],
+      "id": "c5f7cb15-816c-40e9-929b-31dadb741cf8",
+      "name": "HTTP Request | Search CVE",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// CODE | Parse CVE Result\n// Mode: Run Once for Each Item\n\nfunction clean(v) {\n  return String(v ?? '').trim();\n}\n\nfunction norm(v) {\n  return clean(v).toLowerCase();\n}\n\nfunction arr(v) {\n  return Array.isArray(v) ? v : [];\n}\n\nfunction uniq(values) {\n  return [...new Set(arr(values).filter(Boolean))];\n}\n\nfunction getEnglishDescription(cve) {\n  const descs = arr(cve?.descriptions);\n  const en = descs.find(d => d?.lang === 'en');\n  return clean(en?.value);\n}\n\nfunction extractCvss(cve) {\n  const metrics = cve?.metrics || {};\n\n  const v31 = arr(metrics.cvssMetricV31);\n  if (v31.length > 0) {\n    const x = v31[0];\n    return {\n      cvss_score: Number(x?.cvssData?.baseScore ?? 0),\n      severity: clean(x?.cvssData?.baseSeverity || x?.baseSeverity || '')\n    };\n  }\n\n  const v30 = arr(metrics.cvssMetricV30);\n  if (v30.length > 0) {\n    const x = v30[0];\n    return {\n      cvss_score: Number(x?.cvssData?.baseScore ?? 0),\n      severity: clean(x?.cvssData?.baseSeverity || x?.baseSeverity || '')\n    };\n  }\n\n  const v2 = arr(metrics.cvssMetricV2);\n  if (v2.length > 0) {\n    const x = v2[0];\n    return {\n      cvss_score: Number(x?.cvssData?.baseScore ?? 0),\n      severity: clean(x?.baseSeverity || '')\n    };\n  }\n\n  return {\n    cvss_score: 0,\n    severity: ''\n  };\n}\n\nfunction scoreSeverity(cvss) {\n  if (cvss >= 9.0) return 'CRITICAL';\n  if (cvss >= 7.0) return 'HIGH';\n  if (cvss >= 4.0) return 'MEDIUM';\n  if (cvss > 0) return 'LOW';\n  return 'INFO';\n}\n\nfunction extractVersionHints(versionNumber, versionRaw) {\n  const hints = [];\n  const v1 = clean(versionNumber);\n  const v2 = clean(versionRaw);\n\n  if (v1) hints.push(v1);\n\n  const m = v2.match(/\\b\\d+(?:\\.\\d+){0,3}\\b/g);\n  if (m) hints.push(...m);\n\n  return uniq(hints);\n}\n\nfunction buildMatchKeywords(src) {\n  const product = clean(src.product);\n  const service = clean(src.service);\n  const serviceName = clean(src.service_name);\n  const keywordBase = clean(src.keyword_base);\n  const strictQuery = clean(src.search_query_strict);\n  const normalQuery = clean(src.search_query);\n\n  const keywords = [\n    product,\n    service,\n    serviceName,\n    keywordBase\n  ];\n\n  const p = norm(product);\n  if (p.includes('dropbear')) keywords.push('dropbear');\n  if (p.includes('openssh')) keywords.push('openssh');\n  if (p.includes('apache')) keywords.push('apache');\n  if (p.includes('nginx')) keywords.push('nginx');\n  if (p.includes('mysql')) keywords.push('mysql');\n  if (p.includes('postgresql')) keywords.push('postgresql');\n  if (p.includes('redis')) keywords.push('redis');\n  if (p.includes('mongodb')) keywords.push('mongodb');\n\n  for (const q of [strictQuery, normalQuery]) {\n    const parts = clean(q)\n      .split(/\\s+/)\n      .map(x => x.trim())\n      .filter(x => x && x.length >= 3 && !/^\\d+(\\.\\d+){0,3}$/.test(x));\n    keywords.push(...parts);\n  }\n\n  return uniq(\n    keywords\n      .map(k => clean(k))\n      .filter(Boolean)\n      .map(k => k.toLowerCase())\n  );\n}\n\nfunction relevanceScore(text, keywords, versionHints) {\n  let score = 0;\n  const t = norm(text);\n\n  for (const k of keywords) {\n    if (!k) continue;\n\n    if (t.includes(k)) score += 3;\n\n    if (\n      ['dropbear', 'openssh', 'apache', 'nginx', 'mysql', 'postgresql', 'redis', 'mongodb'].includes(k) &&\n      t.includes(k)\n    ) {\n      score += 4;\n    }\n  }\n\n  for (const v of versionHints) {\n    if (v && t.includes(v.toLowerCase())) score += 2;\n  }\n\n  return score;\n}\n\nfunction pickTopCve(list) {\n  let top = null;\n  for (const item of list) {\n    if (\n      !top ||\n      item.relevance_score > top.relevance_score ||\n      (item.relevance_score === top.relevance_score && item.cvss_score > top.cvss_score)\n    ) {\n      top = item;\n    }\n  }\n  return top;\n}\n\n// api = output จาก HTTP Request | Search CVE\nconst api = $json;\n\n// src = output จาก CODE | Prepare CVE Query\nconst src = $('CODE | Prepare CVE Query').item.json;\n\n// ---------- source fields ----------\nconst row_key = clean(src.row_key);\nconst finding_key = clean(src.finding_key);\n\nconst ip = clean(src.ip);\nconst port = src.port ?? '';\nconst protocol = clean(src.protocol);\n\nconst service = clean(src.service);\nconst service_name = clean(src.service_name);\nconst product = clean(src.product);\n\nconst version_raw = clean(src.version_raw || src.version);\nconst version_number = clean(src.version_number);\n\nconst keyword_base = clean(src.keyword_base);\nconst search_query = clean(src.search_query);\nconst search_query_strict = clean(src.search_query_strict);\n\nconst rule_id = clean(src.rule_id);\nconst risk_level = clean(src.risk_level);\nconst risk_score = Number(src.risk_score ?? 0);\nconst severity_rank = Number(src.severity_rank ?? 0);\n\nconst finding = clean(src.finding);\nconst recommendation = clean(src.recommendation);\nconst tags = clean(src.tags);\nconst exposed = !!src.exposed;\n\n// ---------- api response ----------\nconst vulnerabilities = arr(api.vulnerabilities);\nconst matchKeywords = buildMatchKeywords(src);\nconst versionHints = extractVersionHints(version_number, version_raw);\n\nconst scored = vulnerabilities.map(v => {\n  const cve = v?.cve || {};\n  const description = getEnglishDescription(cve);\n  const metric = extractCvss(cve);\n  const severity = metric.severity || scoreSeverity(metric.cvss_score);\n  const rel = relevanceScore(description, matchKeywords, versionHints);\n\n  return {\n    cve_id: clean(cve.id),\n    published: clean(cve.published),\n    last_modified: clean(cve.lastModified),\n    vuln_status: clean(cve.vulnStatus),\n    description,\n    cvss_score: metric.cvss_score,\n    severity,\n    relevance_score: rel\n  };\n});\n\nlet filtered = scored.filter(x => x.relevance_score >= 3);\n\nfiltered.sort((a, b) => {\n  if (b.relevance_score !== a.relevance_score) {\n    return b.relevance_score - a.relevance_score;\n  }\n  return b.cvss_score - a.cvss_score;\n});\n\nconst parsed = filtered.slice(0, 5);\nconst top_cve = pickTopCve(parsed);\n\nconst cve_ids = parsed.map(x => x.cve_id).filter(Boolean);\nconst cve_count = parsed.length;\nconst max_cvss_score = top_cve?.cvss_score ?? 0;\nconst cve_severity = top_cve?.severity ?? 'INFO';\n\nreturn {\n  json: {\n    row_key,\n    finding_key,\n\n    ip,\n    port,\n    protocol,\n\n    service,\n    service_name,\n    product,\n\n    version_raw,\n    version_number,\n\n    keyword_base,\n    search_query,\n    search_query_strict,\n\n    rule_id,\n    risk_level,\n    risk_score,\n    severity_rank,\n\n    finding,\n    recommendation,\n    tags,\n    exposed,\n\n    resultsPerPage: Number(api.resultsPerPage ?? 0),\n    startIndex: Number(api.startIndex ?? 0),\n    totalResults: Number(api.totalResults ?? 0),\n    format: clean(api.format),\n    version: clean(api.version),\n    timestamp: clean(api.timestamp),\n\n    cve_search_query: search_query_strict || search_query,\n    cve_match_keywords: matchKeywords,\n    cve_version_hints: versionHints,\n    nvd_total_results: Number(api.totalResults ?? 0),\n\n    cve_results: parsed,\n    cve_ids,\n    cve_count,\n\n    top_cve_id: top_cve?.cve_id ?? '',\n    top_cve_description: top_cve?.description ?? '',\n    top_cve_relevance_score: top_cve?.relevance_score ?? 0,\n    max_cvss_score,\n    cve_severity,\n\n    cve_found: cve_count > 0,\n    cve_confidence: cve_count > 0 ? 'matched' : 'no_reliable_match'\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2688,
+        -2032
+      ],
+      "id": "ec2f6706-b2a1-4eb9-b436-449c91c0e1ab",
+      "name": "CODE | Parse CVE Result"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// CODE | Check KEV Exploited\n// Mode: Run Once for Each Item\n\nconst j = $json;\n\n// รายการ KEV CVE (ตัวอย่าง)\nconst KEV = [\n\"CVE-2021-44228\",\n\"CVE-2022-22965\",\n\"CVE-2021-34527\",\n\"CVE-2020-1472\",\n\"CVE-2019-0708\",\n\"CVE-2023-34362\",\n\"CVE-2022-30190\"\n];\n\nconst cve_ids = Array.isArray(j.cve_ids) ? j.cve_ids : [];\n\nlet kev_hit = false;\nlet kev_cve = \"\";\n\nfor (const cve of cve_ids) {\n\n  if (KEV.includes(cve)) {\n    kev_hit = true;\n    kev_cve = cve;\n    break;\n  }\n\n}\n\nreturn {\njson: {\n\n...j,\n\nkev_exploited: kev_hit,\nkev_cve,\n\nkev_source: kev_hit ? \"CISA KEV\" : \"\",\n\n}\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2480,
+        -2032
+      ],
+      "id": "ec44db87-3467-41dc-b351-af26b7e4fdbc",
+      "name": "CODE | Check KEV Exploited"
+    },
+    {
+      "parameters": {
+        "content": "## ⚠️ Level 3 — Risk Detection & CVE Intelligence",
+        "height": 752,
+        "width": 2208
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -3968,
+        -2576
+      ],
+      "typeVersion": 1,
+      "id": "189696d6-71c1-4476-96c0-3d9c5235fbe6",
+      "name": "Sticky Note"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "GS | Get Port Inventory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH | Nmap Service Scan": {
+      "main": [
+        [
+          {
+            "node": "CODE | Parse Service Version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Parse Service Version": {
+      "main": [
+        [
+          {
+            "node": "CODE | Normalize Service Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GS | Get Port Inventory": {
+      "main": [
+        [
+          {
+            "node": "CODE | Group Ports by Host",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Normalize Service Data": {
+      "main": [
+        [
+          {
+            "node": "CODE | Build Service Inventory Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Group Ports by Host": {
+      "main": [
+        [
+          {
+            "node": "SSH | Nmap Service Scan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Build Service Inventory Row": {
+      "main": [
+        [
+          {
+            "node": "CODE | Detect Risky Services",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "GS | Service Inventory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Detect Risky Services": {
+      "main": [
+        [
+          {
+            "node": "CODE | Prepare CVE Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Build Risk Finding Row": {
+      "main": [
+        [
+          {
+            "node": "GS | Risk Findings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GS | Risk Findings": {
+      "main": [
+        []
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "GS | Get Port Inventory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Prepare CVE Query": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request | Search CVE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request | Search CVE": {
+      "main": [
+        [
+          {
+            "node": "CODE | Parse CVE Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Parse CVE Result": {
+      "main": [
+        [
+          {
+            "node": "CODE | Check KEV Exploited",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Check KEV Exploited": {
+      "main": [
+        [
+          {
+            "node": "CODE | Build Risk Finding Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "5e51f18a-41da-4a93-806e-0fc5eb8b3e01",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6e8bd4e6dcfe2d257f6d9648f4efaf76882daef04e1402d554d9aae9132bba97"
+  },
+  "id": "ZkoIXShzVfiLKKDz",
+  "tags": []
+}

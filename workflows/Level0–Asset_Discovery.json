@@ -1,0 +1,356 @@
+{
+  "name": "Level0–Asset_Discovery",
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "282c5286-0ed9-4918-baa4-6f54241638c2",
+              "name": "network_range",
+              "value": "192.168.1.0/24",
+              "type": "string"
+            },
+            {
+              "id": "9fb456ae-eed5-4e56-ab57-efa67cb59905",
+              "name": "site",
+              "value": "SmartInfra-LAB",
+              "type": "string"
+            },
+            {
+              "id": "66bc461e-c81e-4fb3-ab41-57813f663636",
+              "name": "scan_profile",
+              "value": "asset_discovery",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        352,
+        -336
+      ],
+      "id": "b09b8794-895b-47bb-890e-b837007d309f",
+      "name": "Set | Network Range"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        144,
+        -336
+      ],
+      "id": "36c6aa32-7074-42da-aa55-58c21cff9a36",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "command": "=set -e\n\nBASE_DIR=\"/root/n8n/local/discovery\"\nmkdir -p \"$BASE_DIR\"\n\nNET=\"{{ $json.network_range }}\"\n\n# แปลง subnet ให้ปลอดภัยสำหรับ filename\nSAFE_NET=$(echo \"$NET\" | tr '/.' '__')\n\nOUT_FILE=\"$BASE_DIR/discovery_${SAFE_NET}.gnmap\"\n\ndocker run --rm \\\n  instrumentisto/nmap:latest \\\n  nmap -sn \"$NET\" -oG - > \"$OUT_FILE\" || true\n\n# ส่งผลลัพธ์ออก stdout\ncat \"$OUT_FILE\""
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        704,
+        -336
+      ],
+      "id": "e706b2e8-8f24-46c5-a1e7-dfe1aa829728",
+      "name": "SSH | Run Nmap Discovery Scan",
+      "credentials": {
+        "sshPassword": {
+          "id": "uYKIdMbOjxSmRPTd",
+          "name": "SSH Password account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = items[0].json;\n\nconst network = data.network_range;\n\nif (!network) {\n  throw new Error(\"network_range is missing\");\n}\n\n// ตรวจรูปแบบ subnet เช่น 192.168.1.0/24\nconst subnetRegex = /^(\\d{1,3}\\.){3}\\d{1,3}\\/\\d{1,2}$/;\n\nif (!subnetRegex.test(network)) {\n  throw new Error(\"Invalid network_range format\");\n}\n\n// ป้องกันค่าแปลก\nif (network.length > 25) {\n  throw new Error(\"network_range too long\");\n}\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        -336
+      ],
+      "id": "451a54f2-aa69-4f2d-b30b-59e9ea7481c3",
+      "name": "CODE | Validate Scan Input"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// SmartInfra Normalize Asset Data\n\nconst site = \"SmartInfra-LAB\";\nconst scan_profile = \"asset_discovery\";\nconst source = \"nmap-scan\";\n\n// เวลาไทย Asia/Bangkok\nconst scan_time = new Date().toLocaleString(\"sv-SE\", {\n  timeZone: \"Asia/Bangkok\"\n}).replace(\" \", \"T\").replace(\"T\", \" \");\n\nconst ip = $json.ip;\nconst status = $json.status || \"unknown\";\n\nconst row_key = `${site}_${ip}`;\n\nreturn {\n  row_key: row_key,\n  ip: ip,\n  status: status,\n  site: site,\n  scan_profile: scan_profile,\n  asset_name: ip,\n  asset_type: \"unknown\",\n  source: source,\n  discovered_at: scan_time,\n  last_seen: scan_time,\n  scan_time: scan_time\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        -336
+      ],
+      "id": "0b0278d4-2081-4781-94ec-4e64703c1d29",
+      "name": "CODE | Normalize Asset Data"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA",
+          "mode": "list",
+          "cachedResultName": "sec_log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "L0_asset_inventory",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_key": "={{$json.row_key}}",
+            "ip": "={{$json.ip}}",
+            "status": "={{$json.status}}",
+            "site": "={{$json.site}}",
+            "scan_profile": "={{$json.scan_profile}}",
+            "asset_name": "={{$json.asset_name}}",
+            "asset_type": "={{$json.asset_type}}",
+            "source": "={{$json.source}}",
+            "discovered_at": "={{$json.discovered_at}}",
+            "last_seen": "={{$json.last_seen}}"
+          },
+          "matchingColumns": [
+            "row_key"
+          ],
+          "schema": [
+            {
+              "id": "row_key",
+              "displayName": "row_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ip",
+              "displayName": "ip",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "site",
+              "displayName": "site",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scan_profile",
+              "displayName": "scan_profile",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "asset_name",
+              "displayName": "asset_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "asset_type",
+              "displayName": "asset_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "discovered_at",
+              "displayName": "discovered_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_seen",
+              "displayName": "last_seen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1296,
+        -336
+      ],
+      "id": "9f5c4831-cacf-4eea-bcc2-24ac7b4a13e9",
+      "name": "Append or update row in sheet",
+      "credentials": {
+        "googleApi": {
+          "id": "cC6tqbqF8VT7WPZa",
+          "name": "Google Sheets account-SmartInfra"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = items[0].json.stdout;\n\nconst lines = stdout.split(\"\\n\");\n\nconst hosts = [];\n\nfor (const line of lines) {\n\n  if (line.includes(\"Status: Up\")) {\n\n    const match = line.match(/Host:\\s+([0-9.]+)/);\n\n    if (match) {\n\n      hosts.push({\n        json: {\n          ip: match[1],\n          status: \"up\",\n          site: $input.first().json.site,\n          scan_profile: \"asset_discovery\"\n        }\n      });\n\n    }\n  }\n}\n\nreturn hosts;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -336
+      ],
+      "id": "47186e6c-54a9-4019-8e1a-9d2c9149972e",
+      "name": "CODE | Parse Nmap Discovery GNMAP"
+    },
+    {
+      "parameters": {
+        "content": "## 🌐 Level 0 — Asset Discovery",
+        "height": 368,
+        "width": 1440,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        96,
+        -432
+      ],
+      "typeVersion": 1,
+      "id": "d6179c50-7f41-45ba-9405-62ed61881fa5",
+      "name": "Sticky Note"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Set | Network Range": {
+      "main": [
+        [
+          {
+            "node": "CODE | Validate Scan Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set | Network Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH | Run Nmap Discovery Scan": {
+      "main": [
+        [
+          {
+            "node": "CODE | Parse Nmap Discovery GNMAP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Validate Scan Input": {
+      "main": [
+        [
+          {
+            "node": "SSH | Run Nmap Discovery Scan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Normalize Asset Data": {
+      "main": [
+        [
+          {
+            "node": "Append or update row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Parse Nmap Discovery GNMAP": {
+      "main": [
+        [
+          {
+            "node": "CODE | Normalize Asset Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "586969c3-2402-40db-b5d6-fa7e7601925d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6e8bd4e6dcfe2d257f6d9648f4efaf76882daef04e1402d554d9aae9132bba97"
+  },
+  "id": "doqJ8H8eIQ4IHQEI",
+  "tags": []
+}

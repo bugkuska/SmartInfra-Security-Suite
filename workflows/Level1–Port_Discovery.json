@@ -1,0 +1,378 @@
+{
+  "name": "Level1–Port_Discovery",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1952,
+        -656
+      ],
+      "id": "e0b21095-da6e-442a-97cd-db20ff976abb",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA",
+          "mode": "list",
+          "cachedResultName": "sec_log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "L0_asset_inventory",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -1728,
+        -656
+      ],
+      "id": "9450c628-43b7-4343-bc3e-3cf486b2dc46",
+      "name": "GS | Get Asset Inventory",
+      "credentials": {
+        "googleApi": {
+          "id": "cC6tqbqF8VT7WPZa",
+          "name": "Google Sheets account-SmartInfra"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = [];\n\nfor (const item of items) {\n\n  const stdout = item.json.stdout;\n\n  const ipMatch = stdout.match(/Host:\\s+([0-9.]+)/);\n  const ip = ipMatch ? ipMatch[1] : null;\n\n  const portMatches = [...stdout.matchAll(/(\\d+)\\/open\\/tcp\\/\\/([^\\/]+)/g)];\n\n  for (const match of portMatches) {\n\n    results.push({\n      json: {\n        ip: ip,\n        port: match[1],\n        service: match[2],\n        protocol: \"tcp\",\n        status: \"open\"\n      }\n    });\n\n  }\n\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1056,
+        -656
+      ],
+      "id": "5dc85592-3e1b-4e98-8233-a45c40457732",
+      "name": "CODE | Parse Ports"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const site = \"SmartInfra-LAB\";\n\nconst now = new Date();\n\nconst scan_time_utc = now.toISOString();\n\nconst scan_time_th = now.toLocaleString(\"sv-SE\", {\n  timeZone: \"Asia/Bangkok\"\n});\n\n// สร้าง scan_id\nconst scan_id = now.toISOString().slice(0,16).replace(/[-T:]/g,\"\");\n\nconst ip = $json.ip;\nconst port = $json.port;\n\nreturn {\n  row_key: `${ip}_${port}`,\n  ip: ip,\n  port: port,\n  service: $json.service,\n  protocol: $json.protocol,\n  status: $json.status,\n  site: site,\n  scan_id: scan_id,\n  scan_time_utc: scan_time_utc,\n  scan_time_th: scan_time_th\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -832,
+        -656
+      ],
+      "id": "b63c9fa4-b836-4484-9cdc-551ebf7c14a5",
+      "name": "CODE | Normalize Port Data"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "22dc2123-1879-47e7-b1f7-d864bd06dd8c",
+              "leftValue": "={{$json.status}}",
+              "rightValue": "up",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "ignoreCase": true
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1504,
+        -656
+      ],
+      "id": "9b9a2349-48fd-4f9a-9be4-1e8859305f4f",
+      "name": "IF | Host Alive"
+    },
+    {
+      "parameters": {
+        "command": "=docker run --rm \\\ninstrumentisto/nmap:latest \\\n-sS -T4 --top-ports 100 {{$json.ip}} -oG -"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        -1280,
+        -688
+      ],
+      "id": "5e520067-039c-40a0-8541-7286a0899fec",
+      "name": "SSH | Run Nmap Port Scan",
+      "credentials": {
+        "sshPassword": {
+          "id": "uYKIdMbOjxSmRPTd",
+          "name": "SSH Password account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA",
+          "mode": "list",
+          "cachedResultName": "sec_log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1768779165,
+          "mode": "list",
+          "cachedResultName": "L1_port_discovery",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit#gid=1768779165"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "scan_time_utc": "={{$json.scan_time_utc}}",
+            "scan_time_th": "={{$json.scan_time_th}}",
+            "row_key": "={{$json.row_key}}",
+            "ip": "={{$json.ip}}",
+            "port": "={{$json.port}}",
+            "service": "={{$json.service}}",
+            "protocol": "={{$json.protocol}}",
+            "status": "={{$json.status}}",
+            "site": "={{$json.site}}",
+            "scan_id": "={{$json.scan_id}}"
+          },
+          "matchingColumns": [
+            "row_key"
+          ],
+          "schema": [
+            {
+              "id": "row_key",
+              "displayName": "row_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ip",
+              "displayName": "ip",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "port",
+              "displayName": "port",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service",
+              "displayName": "service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "protocol",
+              "displayName": "protocol",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "site",
+              "displayName": "site",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scan_id",
+              "displayName": "scan_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "scan_time_utc",
+              "displayName": "scan_time_utc",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scan_time_th",
+              "displayName": "scan_time_th",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -608,
+        -656
+      ],
+      "id": "6b010c42-5d28-4edc-acab-4314173b416e",
+      "name": "GS | Port Inventory",
+      "credentials": {
+        "googleApi": {
+          "id": "cC6tqbqF8VT7WPZa",
+          "name": "Google Sheets account-SmartInfra"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## 🔎 Level 1 — Port Discovery",
+        "height": 336,
+        "width": 1632
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -2048,
+        -784
+      ],
+      "typeVersion": 1,
+      "id": "880c30e9-8383-4fc0-8628-922b3f4c1e7c",
+      "name": "Sticky Note"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "GS | Get Asset Inventory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GS | Get Asset Inventory": {
+      "main": [
+        [
+          {
+            "node": "IF | Host Alive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Parse Ports": {
+      "main": [
+        [
+          {
+            "node": "CODE | Normalize Port Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Normalize Port Data": {
+      "main": [
+        [
+          {
+            "node": "GS | Port Inventory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF | Host Alive": {
+      "main": [
+        [
+          {
+            "node": "SSH | Run Nmap Port Scan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH | Run Nmap Port Scan": {
+      "main": [
+        [
+          {
+            "node": "CODE | Parse Ports",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "e7daadc9-a393-42cb-b82a-a210737ebf1a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6e8bd4e6dcfe2d257f6d9648f4efaf76882daef04e1402d554d9aae9132bba97"
+  },
+  "id": "X3VRAw53dcXVUWXT",
+  "tags": []
+}

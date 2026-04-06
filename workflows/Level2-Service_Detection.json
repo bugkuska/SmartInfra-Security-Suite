@@ -1,0 +1,414 @@
+{
+  "name": "Level2-Service_Detection",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2112,
+        -736
+      ],
+      "id": "72a7922d-d978-4628-ae37-f99c46931a41",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "command": "=docker run --rm instrumentisto/nmap:latest -sV -p {{$json.ports}} {{$json.ip}}"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        -1456,
+        -736
+      ],
+      "id": "f374b160-2d90-411f-95d1-dae33d174fe3",
+      "name": "SSH | Nmap Service Scan",
+      "credentials": {
+        "sshPassword": {
+          "id": "uYKIdMbOjxSmRPTd",
+          "name": "SSH Password account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = [];\n\nfor (const item of items) {\n  const stdout = item.json.stdout || \"\";\n  if (!stdout) continue;\n\n  // หา IP\n  const ipMatch = stdout.match(/Nmap scan report for\\s+([0-9.]+)/);\n  const ip = ipMatch ? ipMatch[1] : null;\n\n  // แยกบรรทัด\n  const lines = stdout.split(\"\\n\");\n\n  for (const line of lines) {\n    // จับบรรทัด port/service/version\n    // ตัวอย่าง:\n    // 22/tcp open  ssh     Dropbear sshd 2019.78 (protocol 2.0)\n    // 53/tcp open  domain  (generic dns response: NXDOMAIN)\n    const m = line.match(/^(\\d+)\\/tcp\\s+open\\s+(\\S+)\\s*(.*)$/);\n\n    if (m) {\n      const port = Number(m[1]);\n      const service = m[2] || \"\";\n      const version = (m[3] || \"\").trim();\n\n      results.push({\n        json: {\n          ip,\n          port,\n          service,\n          version,\n          raw_line: line.trim()\n        }\n      });\n    }\n  }\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        -736
+      ],
+      "id": "2c4fe707-7151-4f99-9562-9b16d3e2d47e",
+      "name": "CODE | Parse Service Version"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA",
+          "mode": "list",
+          "cachedResultName": "sec_log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1768779165,
+          "mode": "list",
+          "cachedResultName": "L1_port_discovery",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit#gid=1768779165"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -1904,
+        -736
+      ],
+      "id": "c977607d-50c7-4ec5-93ce-d3cbd233c174",
+      "name": "GS | Get Port Inventory",
+      "credentials": {
+        "googleApi": {
+          "id": "cC6tqbqF8VT7WPZa",
+          "name": "Google Sheets account-SmartInfra"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function cleanText(v) {\n  return String(v || \"\").replace(/\\s+/g, \" \").trim();\n}\n\nfunction serviceLabel(service, port) {\n  const s = String(service || \"\").toLowerCase();\n\n  if (s === \"ssh\" || port === 22) return \"SSH\";\n  if (s === \"domain\" || port === 53) return \"DNS\";\n  if (s.includes(\"http\") || [80, 8080, 8008].includes(port)) return \"HTTP\";\n  if (s.includes(\"ssl\") || s.includes(\"https\") || [443, 8443].includes(port)) return \"HTTPS\";\n  if (s === \"rtsp\" || port === 554) return \"RTSP\";\n  if (s === \"rpcbind\" || port === 111) return \"RPCBIND\";\n  if ([135, 139, 445].includes(port)) return \"SMB/RPC\";\n  if (port === 3000) return \"APP\";\n  return String(service || \"\").toUpperCase();\n}\n\nfunction detectProduct(version) {\n  const v = String(version || \"\");\n\n  if (/dropbear/i.test(v)) return \"Dropbear SSH\";\n  if (/openssh/i.test(v)) return \"OpenSSH\";\n  if (/apache/i.test(v)) return \"Apache HTTP Server\";\n  if (/nginx/i.test(v)) return \"Nginx\";\n  if (/microsoft-iis/i.test(v)) return \"Microsoft IIS\";\n  if (/node/i.test(v)) return \"Node.js App\";\n  if (/dns/i.test(v)) return \"DNS Service\";\n\n  return \"\";\n}\n\nconst out = [];\n\nfor (const item of items) {\n  const ip = cleanText(item.json.ip);\n  const port = Number(item.json.port || 0);\n  const protocol = \"tcp\";\n  const service = cleanText(item.json.service).toLowerCase();\n  const version = cleanText(item.json.version);\n  const raw_line = cleanText(item.json.raw_line);\n\n  const service_name = serviceLabel(service, port);\n  const product = detectProduct(version);\n\n  out.push({\n    json: {\n      ip,\n      port,\n      protocol,\n      service,\n      service_name,\n      product,\n      version,\n      raw_line,\n      exposed: true\n    }\n  });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -976,
+        -736
+      ],
+      "id": "3562e0f1-886a-47e3-86b2-2653a5f3f0ca",
+      "name": "CODE | Normalize Service Data"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA",
+          "mode": "list",
+          "cachedResultName": "sec_log",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 306177336,
+          "mode": "list",
+          "cachedResultName": "L2_service_inventory",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/16DuvGFaLpvv6unYY-W8rNFnrqGpIS7QLtClZ4UdKXlA/edit#gid=306177336"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "scan_time_utc": "={{$json.scan_time_utc}}",
+            "scan_time_th": "={{$json.scan_time_th}}",
+            "row_key": "={{$json.row_key}}",
+            "ip": "={{$json.ip}}",
+            "port": "={{$json.port}}",
+            "service": "={{$json.service}}",
+            "protocol": "={{$json.protocol}}",
+            "service_name": "={{$json.service_name}}",
+            "product": "={{$json.product}}",
+            "version": "={{$json.version}}",
+            "exposed": "={{$json.exposed}}",
+            "first_seen": "= {{$json.first_seen}}",
+            "last_seen": "={{$json.last_seen}}"
+          },
+          "matchingColumns": [
+            "row_key"
+          ],
+          "schema": [
+            {
+              "id": "row_key",
+              "displayName": "row_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ip",
+              "displayName": "ip",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "port",
+              "displayName": "port",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "protocol",
+              "displayName": "protocol",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service",
+              "displayName": "service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "service_name",
+              "displayName": "service_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "product",
+              "displayName": "product",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "version",
+              "displayName": "version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "exposed",
+              "displayName": "exposed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "first_seen",
+              "displayName": "first_seen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_seen",
+              "displayName": "last_seen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "scan_time_utc",
+              "displayName": "scan_time_utc",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scan_time_th",
+              "displayName": "scan_time_th",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -528,
+        -736
+      ],
+      "id": "5467a0c8-3d06-4ceb-9722-c5051966e8df",
+      "name": "GS | Service Inventory",
+      "credentials": {
+        "googleApi": {
+          "id": "cC6tqbqF8VT7WPZa",
+          "name": "Google Sheets account-SmartInfra"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const hosts = {};\n\nfor (const item of items) {\n\n  const ip = item.json.ip;\n  const port = item.json.port;\n\n  if (!hosts[ip]) {\n    hosts[ip] = [];\n  }\n\n  hosts[ip].push(port);\n}\n\nconst results = [];\n\nfor (const ip in hosts) {\n\n  results.push({\n    json: {\n      ip: ip,\n      ports: hosts[ip].join(\",\")\n    }\n  });\n\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1696,
+        -736
+      ],
+      "id": "7c6d3f90-d602-4bca-a5bc-c307b02da2f1",
+      "name": "CODE | Group Ports by Host"
+    },
+    {
+      "parameters": {
+        "jsCode": "const nowUTC = new Date().toISOString();\nconst nowTH = new Date().toLocaleString(\"sv-SE\", { timeZone: \"Asia/Bangkok\" });\n\nreturn items.map(item => {\n\n  const ip = item.json.ip;\n  const port = item.json.port;\n  const protocol = item.json.protocol;\n\n  const row_key = `${ip}_${port}_${protocol}`;\n\n  return {\n    json: {\n      row_key,\n      ip,\n      port,\n      protocol,\n      service: item.json.service,\n      service_name: item.json.service_name,\n      product: item.json.product,\n      version: item.json.version,\n      exposed: item.json.exposed,\n      first_seen: nowTH,\n      last_seen: nowTH,\n      scan_time_utc: nowUTC,\n      scan_time_th: nowTH\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -768,
+        -736
+      ],
+      "id": "1fbe5374-0965-4b0b-a141-c04206d2c6ce",
+      "name": "CODE | Build Service Inventory Row"
+    },
+    {
+      "parameters": {
+        "content": "## 🧠 Level 2 — Service Detection",
+        "height": 384,
+        "width": 1792,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -2128,
+        -880
+      ],
+      "typeVersion": 1,
+      "id": "f5e65154-ed37-4a00-9344-b2ffda4b40cc",
+      "name": "Sticky Note"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "GS | Get Port Inventory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SSH | Nmap Service Scan": {
+      "main": [
+        [
+          {
+            "node": "CODE | Parse Service Version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Parse Service Version": {
+      "main": [
+        [
+          {
+            "node": "CODE | Normalize Service Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GS | Get Port Inventory": {
+      "main": [
+        [
+          {
+            "node": "CODE | Group Ports by Host",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Normalize Service Data": {
+      "main": [
+        [
+          {
+            "node": "CODE | Build Service Inventory Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Group Ports by Host": {
+      "main": [
+        [
+          {
+            "node": "SSH | Nmap Service Scan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CODE | Build Service Inventory Row": {
+      "main": [
+        [
+          {
+            "node": "GS | Service Inventory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "06373ece-bb50-4050-8e0c-35dbc79a68f7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6e8bd4e6dcfe2d257f6d9648f4efaf76882daef04e1402d554d9aae9132bba97"
+  },
+  "id": "vQA1Q8R3iWdFTecG",
+  "tags": []
+}
